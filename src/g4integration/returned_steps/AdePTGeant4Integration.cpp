@@ -7,6 +7,7 @@
 #include <VecGeom/navigation/NavigationState.h>
 
 #include <G4ios.hh>
+#include <G4PhysicalConstants.hh>
 #include <G4SystemOfUnits.hh>
 #include <G4TransportationManager.hh>
 #include <G4VSensitiveDetector.hh>
@@ -25,6 +26,7 @@
 #include "G4Positron.hh"
 #include "G4Gamma.hh"
 
+#include <cmath>
 #include <new>
 #include <type_traits>
 
@@ -219,6 +221,16 @@ G4ParticleDefinition *GetParticleDefinition(ParticleType particleType)
   }
 }
 
+G4double VelocityFromKineticEnergy(const G4ParticleDefinition &particle, G4double kineticEnergy)
+{
+  if (kineticEnergy <= 0.) return 0.;
+
+  const G4double mass = particle.GetPDGMass();
+  if (mass <= 0.) return CLHEP::c_light;
+
+  return CLHEP::c_light * std::sqrt(kineticEnergy * (kineticEnergy + 2. * mass)) / (kineticEnergy + mass);
+}
+
 void IncrementCurrentStepNumber(G4Track &track, G4int nSteps)
 {
   if (nSteps < 1) nSteps = 1;
@@ -319,7 +331,7 @@ G4Track *AdePTGeant4Integration::MakeTrackForCPUStacking(const G4Track &track, G
   clone->SetOriginTouchableHandle(track.GetOriginTouchableHandle());
 #endif
   clone->SetUserInformation(track.GetUserInformation());
-  clone->SetTrackStatus(track.GetTrackStatus());
+  clone->SetTrackStatus(G4TrackStatus::fAlive);
   return clone;
 }
 
@@ -874,9 +886,10 @@ void AdePTGeant4Integration::FillG4Track(GPUStep const *aGPUStep, G4Track *aTrac
   // aTrack->SetOriginTouchableHandle(nullptr);                                               // Missing data
   aTrack->SetKineticEnergy(aGPUStep->fPostStepPoint.fEKin);      // Real data
   aTrack->SetMomentumDirection(aPostStepPointMomentumDirection); // Real data
-  // aTrack->SetVelocity(0);                                                                  // Missing data
+  aTrack->SetVelocity(VelocityFromKineticEnergy(*aTrack->GetParticleDefinition(),
+                                                aGPUStep->fPostStepPoint.fEKin)); // Real data
   // aTrack->SetPolarization(); // Missing Data data
-  // aTrack->SetTrackStatus(G4TrackStatus::fAlive);                                           // Missing data
+  aTrack->SetTrackStatus(aGPUStep->fLastStepOfTrack ? G4TrackStatus::fStopAndKill : G4TrackStatus::fAlive); // Real data
   // aTrack->SetBelowThresholdFlag(false);                                                    // Missing data
   // aTrack->SetGoodForTrackingFlag(false);                                                   // Missing data
   aTrack->SetStepLength(aGPUStep->fStepLength);                          // Real data
@@ -911,8 +924,9 @@ void AdePTGeant4Integration::FillG4Step(GPUStep const *aGPUStep, G4Step *aG4Step
   aG4Step->SetTotalEnergyDeposit(aGPUStep->fTotalEnergyDeposit); // Real data
   // aG4Step->SetNonIonizingEnergyDeposit(0);                      // Missing data
   // aG4Step->SetControlFlag(G4SteppingControl::NormalCondition);  // Missing data
-  if (aGPUStep->fStepCounter == 1) aG4Step->SetFirstStepFlag(); // Real data
-  if (aGPUStep->fLastStepOfTrack) aG4Step->SetLastStepFlag();   // Real data
+  // aG4Step->SetFirstStepFlag();                                  // Missing data
+  // aG4Step->SetLastStepFlag();                                   // Missing data
+  // GPU transport does not provide first/last-step state per volume.
   // aG4Step->SetPointerToVectorOfAuxiliaryPoints(nullptr);        // Missing data
 
   // G4Track
@@ -960,7 +974,8 @@ void AdePTGeant4Integration::FillG4Step(GPUStep const *aGPUStep, G4Step *aG4Step
                                                     aGPUStep->fPreStepPoint.fMomentumDirection.y(),
                                                     aGPUStep->fPreStepPoint.fMomentumDirection.z())); // Real data
   aPreStepPoint->SetKineticEnergy(aGPUStep->fPreStepPoint.fEKin);                                     // Real data
-  // aPreStepPoint->SetVelocity(0);                                                                 // Missing data
+  aPreStepPoint->SetVelocity(VelocityFromKineticEnergy(*aTrack->GetParticleDefinition(),
+                                                       aGPUStep->fPreStepPoint.fEKin));              // Real data
   aPreStepPoint->SetTouchableHandle(aPreG4TouchableHandle);                                          // Real data
   aPreStepPoint->SetMaterial(aPreG4TouchableHandle->GetVolume()->GetLogicalVolume()->GetMaterial()); // Real data
   aPreStepPoint->SetMaterialCutsCouple(aPreG4TouchableHandle->GetVolume()->GetLogicalVolume()->GetMaterialCutsCouple());
@@ -982,7 +997,8 @@ void AdePTGeant4Integration::FillG4Step(GPUStep const *aGPUStep, G4Step *aG4Step
   aPostStepPoint->SetProperTime(aGPUStep->fProperTime);                  // Real data
   aPostStepPoint->SetMomentumDirection(aPostStepPointMomentumDirection); // Real data
   aPostStepPoint->SetKineticEnergy(aGPUStep->fPostStepPoint.fEKin);      // Real data
-  // aPostStepPoint->SetVelocity(0);                                                                  // Missing data
+  aPostStepPoint->SetVelocity(VelocityFromKineticEnergy(*aTrack->GetParticleDefinition(),
+                                                        aGPUStep->fPostStepPoint.fEKin)); // Real data
   if (const auto postVolume = aPostG4TouchableHandle->GetVolume();
       postVolume != nullptr) {                                  // protect against nullptr if postNavState is outside
     aPostStepPoint->SetTouchableHandle(aPostG4TouchableHandle); // Real data
